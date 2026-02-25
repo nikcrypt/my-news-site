@@ -1,0 +1,50 @@
+---
+import { pb } from '../../lib/pb'; // your PocketBase client
+import Layout from '../../layouts/Layout.astro';
+
+export async function getStaticPaths() {
+  try {
+    const allArticles = await pb.collection('articles').getFullList({
+      filter: 'status = "published"',
+      fields: 'slug', // only fetch slug to keep it light
+    });
+    console.log('Found articles for paths:', allArticles.length, allArticles.map(a => a.slug)); // ← debug in terminal
+
+    return allArticles.map(article => ({
+      params: { slug: article.slug },
+    }));
+  } catch (err) {
+    console.error('getStaticPaths error:', err);
+    return []; // fallback - but log it!
+  }
+}
+
+const { slug } = Astro.params;
+
+// Fetch the single article
+let article;
+try {
+  article = await pb.collection('articles').getFirstListItem(`slug="${slug}" && status = "published"`, {
+    expand: 'category,author,tags',
+  });
+} catch (err) {
+  console.error('Article fetch error:', err);
+  // Optional: return Astro.redirect('/404') or set status
+  Astro.response.status = 404;
+  return Astro.redirect('/404');
+}
+---
+
+<Layout title={article?.title || 'Not Found'}>
+  {article ? (
+    <article class="prose mx-auto">
+      <h1>{article.title}</h1>
+      <div set:html={article.content} />
+      <!-- rest of your article markup -->
+    </article>
+  ) : (
+    <p>Article not found</p>
+  )}
+
+  
+</Layout>

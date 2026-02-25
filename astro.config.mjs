@@ -1,5 +1,11 @@
-// @ts-check
+// astro.config.mjs
 import { defineConfig } from 'astro/config';
+import tailwindcss from '@tailwindcss/vite';
+import node from '@astrojs/node';  // ← ADD THIS LINE
 
-// https://astro.build/config
-export default defineConfig({});
+export default defineConfig({
+  vite: {
+    plugins: [tailwindcss()],
+  },         // or 'server' if you want full SSR
+  adapter: node({ mode: 'standalone' }), // now works
+});

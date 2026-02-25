@@ -1,0 +1,88 @@
+---
+// src/components/ArticleCard.astro
+
+// Props: article (PocketBase record), pb (PocketBase instance)
+const { article, pb } = Astro.props;
+
+// Safe image URL with fallback
+const imageUrl = article.featured_image
+  ? `${pb.getFileUrl(article, article.featured_image)}?thumb=800x450`
+  : 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&auto=format&fit=crop&q=80';
+
+// Category fallback
+const category = article.expand?.category?.name?.trim() || 'News';
+
+// Formatted date
+const date = article.published_at
+  ? new Date(article.published_at).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    })
+  : 'Date unavailable';
+
+// Safe summary / excerpt logic
+const excerpt = article.summary?.trim()
+  ? article.summary.trim()
+  : article.content
+    ? article.content
+        .replace(/<[^>]+>/g, '')           // remove HTML tags
+        .replace(/\s+/g, ' ')              // normalize whitespace
+        .trim()
+        .slice(0, 160) + (article.content.length > 160 ? '...' : '')
+    : 'No description available';
+
+// Optional author info
+const authorName = article.expand?.author?.name?.trim() || 'Editor';
+const authorAvatar = article.expand?.author?.avatar
+  ? pb.getFileUrl(article.expand.author, article.expand.author.avatar)
+  : null;
+---
+
+<a
+  href={`/news/${article.slug}`}
+  class="group card bg-base-100 shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden border border-base-200 rounded-xl h-full flex flex-col"
+>
+  <!-- Image + category badge -->
+  <figure class="relative overflow-hidden aspect-[16/9]">
+    <img
+      src={imageUrl}
+      alt={article.title || 'Article image'}
+      class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+      loading="lazy"
+    />
+    <div class="absolute top-4 left-4 badge badge-primary badge-lg font-medium shadow-md">
+      {category}
+    </div>
+  </figure>
+
+  <!-- Card body -->
+  <div class="card-body p-6 flex flex-col flex-grow">
+    <!-- Title -->
+    <h2 class="card-title text-xl md:text-2xl font-bold line-clamp-2 mb-3 group-hover:text-primary transition-colors">
+      {article.title || 'Untitled Article'}
+    </h2>
+
+    <!-- Excerpt / summary -->
+    <p class="text-base-content/70 line-clamp-3 mb-6 flex-grow">
+      {excerpt}
+    </p>
+
+    <!-- Meta footer -->
+    <div class="flex items-center justify-between text-sm opacity-75 mt-auto">
+      <div class="flex items-center gap-2">
+        <!-- Author avatar (if exists) -->
+        {authorAvatar && (
+          <div class="avatar">
+            <div class="w-8 rounded-full">
+              <img src={authorAvatar} alt={authorName} />
+            </div>
+          </div>
+        )}
+        <span class="font-medium">{authorName}</span>
+      </div>
+
+      <time datetime={article.published_at}>{date}</time>
+    </div>
+  </div>
+</a>

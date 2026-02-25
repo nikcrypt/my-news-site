@@ -1,11 +1,26 @@
 ---
-import Welcome from '../components/Welcome.astro';
+// src/pages/index.astro
 import Layout from '../layouts/Layout.astro';
+import ArticleCard from '../components/ArticleCard.astro';
+import { pb } from '../lib/pb';
 
-// Welcome to Astro! Wondering what to do next? Check out the Astro documentation at https://docs.astro.build
-// Don't want to use any of this? Delete everything in this file, the `assets`, `components`, and `layouts` directories, and start fresh.
+const articles = await pb.collection('articles').getList(1, 12, {
+  filter: 'status = "published" && published_at <= @now',
+  sort: '-published_at',
+  expand: 'category,author',
+});
 ---
 
-<Layout>
-	<Welcome />
+<Layout title="Latest News">
+  <h1 class="text-4xl md:text-5xl font-bold mb-10 text-center">Latest News</h1>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+    {articles.items.map(article => (
+      <ArticleCard article={article} pb={pb} />
+    ))}
+  </div>
+
+  {articles.items.length === 0 && (
+    <p class="text-center text-xl opacity-70 mt-12">No articles yet...</p>
+  )}
 </Layout>

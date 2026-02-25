@@ -1,0 +1,7 @@
+@import "tailwindcss";
+/* or the classic directives if you prefer v3-style compatibility: */
+/*
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+*/
