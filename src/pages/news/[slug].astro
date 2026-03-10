@@ -3,83 +3,125 @@
 import { pb } from '../../lib/pb';
 import Layout from '../../layouts/Layout.astro';
 
-// Generate static paths for all published articles
+// ------------------------------------------------------------
+// 1. getStaticPaths() – now with logging and better options
+// ------------------------------------------------------------
 export async function getStaticPaths() {
   try {
+    console.log('🔍 Fetching articles for static paths...');
     const articles = await pb.collection('articles').getFullList({
       filter: 'status = "published" && published_at <= @now',
       fields: 'slug',
+      batch: 100,               // fetch up to 100 per request
+      requestKey: null,          // disable auto-cancellation
     });
-    return articles.map(article => ({
+    console.log(`✅ Found ${articles.length} published articles`);
+    if (articles.length > 0) {
+      console.log('📰 Sample slugs:', articles.slice(0, 5).map(a => a.slug).join(', '));
+    }
+
+    return articles.map((article) => ({
       params: { slug: article.slug },
     }));
   } catch (err) {
-    console.error('getStaticPaths error:', err);
-    return [];
+    console.error('❌ getStaticPaths error:', err);
+    return []; // no pages will be generated
   }
 }
 
+// ------------------------------------------------------------
+// 2. Get current slug from URL params
+// ------------------------------------------------------------
 const { slug } = Astro.params;
 
-// Fetch the single article
+// ------------------------------------------------------------
+// 3. Fetch article and related data
+// ------------------------------------------------------------
 let article = null;
+let comments = [];
+let averageRating = 0;
+let totalRatings = 0;
+let favoriteCount = 0;
+
 try {
   article = await pb.collection('articles').getFirstListItem(
     `slug = "${slug}" && status = "published" && published_at <= @now`,
-    {
-      expand: 'category,author,tags',
-    }
+    { expand: 'category,author,tags' }
   );
+
+  comments = await pb.collection('comments').getFullList({
+    filter: `article = "${article.id}"`,
+    sort: '-created',
+  });
+
+  const ratings = await pb.collection('ratings').getFullList({
+    filter: `article = "${article.id}"`,
+  });
+  totalRatings = ratings.length;
+  if (totalRatings > 0) {
+    const sum = ratings.reduce((acc, r) => acc + r.rating, 0);
+    averageRating = sum / totalRatings;
+  }
+
+  const favorites = await pb.collection('favorites').getFullList({
+    filter: `article = "${article.id}"`,
+  });
+  favoriteCount = favorites.length;
 } catch (err) {
   console.error('Fetch error:', err);
-  Astro.response.status = 404;
   return Astro.redirect('/404');
 }
 
-// Featured image (using 'cover' field as you confirmed)
-const coverFilename = article?.cover; // ← your field name
+// ------------------------------------------------------------
+// 4. Format date helper
+// ------------------------------------------------------------
+const formatDate = (dateStr: string) => {
+  return new Date(dateStr).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+};
+
+// ------------------------------------------------------------
+// 5. Featured image – using getURL (uppercase!)
+// ------------------------------------------------------------
+const coverFilename = article?.cover;
 let featuredImage = null;
-
 if (coverFilename) {
-  featuredImage = pb.files.getUrl(
-    article,
-    coverFilename,
-    { thumb: '1200x0' } // high quality, auto height
-  );
+  featuredImage = pb.files.getURL(article, coverFilename, { thumb: '1200x0' });
 }
-
-// Fallback placeholder if no image
 const fallbackImage = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&auto=format&fit=crop&q=80';
 
-// Author avatar (optional)
+// ------------------------------------------------------------
+// 6. Author avatar – also getURL
+// ------------------------------------------------------------
 const authorAvatar = article.expand?.author?.avatar
-  ? pb.files.getUrl(article.expand.author, article.expand.author.avatar, { thumb: '80x80' })
+  ? pb.files.getURL(article.expand.author, article.expand.author.avatar, {
+      thumb: '80x80',
+    })
   : null;
 ---
+<Layout title={article.title}>
+  <article class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-16">
+    <!-- Title at the very top -->
+    <h1 class="text-4xl md:text-5xl font-bold mb-6">{article.title}</h1>
 
-<Layout title={article.title || 'Article Not Found'} active="article">
+    <!-- Featured Image -->
+    <figure class="mb-8 -mx-4 sm:-mx-6 lg:-mx-8">
+      <img
+        src={featuredImage || fallbackImage}
+        alt={article.title}
+        class="w-full h-auto rounded-none sm:rounded-2xl shadow-2xl object-cover aspect-[16/9]"
+        loading="eager"
+        width="1200"
+        height="675"
+      />
+    </figure>
 
-  {article ? (
-    <article class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-16 prose prose-lg lg:prose-xl dark:prose-invert">
-
-      <!-- Hero Featured Image (using 'cover' field) -->
-      <figure class="mb-8 md:mb-12 -mx-4 sm:-mx-6 lg:-mx-8">
-        <img
-          src={featuredImage || fallbackImage}
-          alt={article.title || 'Article cover'}
-          class="w-full h-auto rounded-none sm:rounded-2xl shadow-2xl object-cover aspect-[16/9]"
-          loading="eager"
-          decoding="async"
-          width="1200"
-          height="675"
-        />
-      </figure>
-
-      <!-- Title -->
-      <h1 class="text-4xl md:text-5xl font-bold mb-6">{article.title}</h1>
-
-      <!-- Meta info -->
-      <div class="flex flex-wrap items-center gap-4 text-sm opacity-80 mb-10">
+    <!-- Meta bar: category, author, date, rating, favorite -->
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-10">
+      <div class="flex flex-wrap items-center gap-4">
         {article.expand?.category?.name && (
           <span class="badge badge-primary badge-outline uppercase text-xs px-3 py-1">
             {article.expand.category.name}
@@ -100,33 +142,383 @@ const authorAvatar = article.expand?.author?.avatar
         )}
 
         <time class="text-base-content/70">
-          {new Date(article.published_at).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          })}
+          {formatDate(article.published_at)}
         </time>
       </div>
 
-      <!-- Rich content from PocketBase -->
-      <div class="prose-headings:font-bold prose-a:text-primary" set:html={article.content} />
+      <!-- Rating and favorite (interactive) -->
+      <div class="flex items-center gap-4" id="meta-actions">
+        <!-- Star rating display -->
+        <div
+          class="flex items-center gap-1 tooltip"
+          data-tip={`${averageRating.toFixed(1)} (${totalRatings} ratings)`}
+        >
+          <div class="rating rating-sm rating-half">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <input
+                type="radio"
+                name="rating-10"
+                class={`mask mask-star-2 mask-half-${star % 2 === 1 ? '1' : '2'} bg-orange-400`}
+                disabled
+                checked={Math.round(averageRating * 2) === star}
+              />
+            ))}
+          </div>
+          <span class="text-sm font-medium">{averageRating.toFixed(1)}</span>
+        </div>
 
-      <!-- Tags (if any) -->
-      {article.expand?.tags?.length > 0 && (
-        <div class="mt-12 flex flex-wrap gap-2">
-          {article.expand.tags.map(tag => (
-            <span class="badge badge-outline badge-secondary text-sm">
-              #{tag.name}
-            </span>
+        <!-- Favorite button -->
+        <button
+          class="btn btn-ghost btn-sm gap-2 favorite-btn"
+          data-article-id={article.id}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="1.5"
+            stroke="currentColor"
+            class="w-5 h-5"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z"
+            />
+          </svg>
+          <span class="favorite-count">{favoriteCount}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Article content -->
+  <!-- Article content with enhanced styling -->
+<div
+class="article-body prose prose-lg lg:prose-xl dark:prose-invert prose-headings:font-bold prose-a:text-primary max-w-none"
+set:html={article.body}
+/>
+
+<style is:global>
+  /* Enhance the article body with beautiful typography */
+  .article-body {
+    /* Drop cap for first paragraph */
+    & > p:first-of-type::first-letter {
+      float: left;
+      font-size: 4em;
+      line-height: 0.8;
+      margin-right: 0.15em;
+      color: hsl(var(--p));
+      font-weight: 700;
+      font-family: 'Georgia', serif;
+    }
+
+    /* Blockquotes */
+    & blockquote {
+      font-style: italic;
+      border-left: 4px solid hsl(var(--p));
+      background-color: hsl(var(--b2) / 0.5);
+      padding: 1rem 1.5rem;
+      border-radius: 0.5rem;
+      margin: 1.5rem 0;
+      position: relative;
+    }
+    & blockquote::before {
+      content: "“";
+      font-size: 4rem;
+      position: absolute;
+      left: -0.2rem;
+      top: -1rem;
+      color: hsl(var(--p) / 0.3);
+      font-family: serif;
+    }
+
+    /* Images inside content */
+    & img {
+      border-radius: 0.75rem;
+      box-shadow: 0 10px 30px -15px rgba(0,0,0,0.2);
+      margin: 2rem auto;
+      display: block;
+    }
+
+    /* Code blocks */
+    & pre {
+      background: #1e1e1e !important;
+      color: #d4d4d4;
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      overflow-x: auto;
+      font-size: 0.9em;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+    }
+    & code:not(pre code) {
+      background: hsl(var(--b3));
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.25rem;
+      font-size: 0.9em;
+      color: hsl(var(--p));
+    }
+
+    /* Lists */
+    & ul {
+      list-style-type: none;
+      padding-left: 1.5rem;
+    }
+    & ul > li {
+      position: relative;
+    }
+    & ul > li::before {
+      content: "▹";
+      position: absolute;
+      left: -1.2rem;
+      color: hsl(var(--p));
+      font-weight: bold;
+    }
+    & ol {
+      list-style-type: none;
+      counter-reset: item;
+      padding-left: 1.5rem;
+    }
+    & ol > li {
+      counter-increment: item;
+      position: relative;
+    }
+    & ol > li::before {
+      content: counter(item) ".";
+      position: absolute;
+      left: -1.5rem;
+      color: hsl(var(--p));
+      font-weight: 600;
+    }
+
+    /* Tables */
+    & table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 2rem 0;
+    }
+    & th {
+      background: hsl(var(--p) / 0.1);
+      font-weight: 600;
+      padding: 0.75rem 1rem;
+      text-align: left;
+    }
+    & td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid hsl(var(--b3));
+    }
+    & tr:hover {
+      background: hsl(var(--b2) / 0.5);
+    }
+
+    /* Links */
+    & a {
+      text-decoration: none;
+      border-bottom: 2px solid transparent;
+      transition: border-color 0.2s;
+    }
+    & a:hover {
+      border-bottom-color: hsl(var(--p));
+    }
+
+    /* Pull quotes (if you add class="pull-quote" in editor) */
+    & .pull-quote {
+      float: right;
+      width: 40%;
+      margin: 0 0 1rem 2rem;
+      font-size: 1.25rem;
+      font-style: italic;
+      color: hsl(var(--p));
+      border-left: 3px solid hsl(var(--p));
+      padding-left: 1rem;
+      background: none;
+    }
+  }
+</style>
+    <!-- Tags -->
+    {article.expand?.tags?.length > 0 && (
+      <div class="mt-12 flex flex-wrap gap-2">
+        {article.expand.tags.map((tag) => (
+          <span class="badge badge-outline badge-secondary text-sm">
+            #{tag.name}
+          </span>
+        ))}
+      </div>
+    )}
+
+    <!-- Comments Section -->
+    <section class="mt-16 border-t pt-10">
+      <h2 class="text-2xl font-bold mb-6">Comments ({comments.length})</h2>
+
+      <!-- Comment list -->
+      <div class="space-y-6 mb-10" id="comments-list">
+        {comments.length > 0 ? (
+          comments.map((comment) => (
+            <div class="bg-base-100 p-4 rounded-lg shadow-sm">
+              <div class="flex items-center gap-3 mb-2">
+                <div class="font-semibold">{comment.name}</div>
+                <div class="text-xs opacity-60">{formatDate(comment.created)}</div>
+              </div>
+              <p class="text-base-content/80">{comment.content}</p>
+            </div>
+          ))
+        ) : (
+          <p class="opacity-70 italic">
+            No comments yet. Be the first to comment!
+          </p>
+        )}
+      </div>
+
+      <!-- Comment form -->
+      <form id="comment-form" class="bg-base-100 p-6 rounded-xl shadow-sm">
+        <h3 class="text-lg font-semibold mb-4">Leave a comment</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <input
+            type="text"
+            name="name"
+            placeholder="Your name *"
+            required
+            class="input input-bordered w-full"
+          />
+          <input
+            type="email"
+            name="email"
+            placeholder="Your email (optional)"
+            class="input input-bordered w-full"
+          />
+        </div>
+        <textarea
+          name="content"
+          rows="4"
+          placeholder="Your comment *"
+          required
+          class="textarea textarea-bordered w-full mb-4"
+        ></textarea>
+        <input type="hidden" name="articleId" value={article.id} />
+        <button type="submit" class="btn btn-primary">Post Comment</button>
+        <div id="comment-status" class="mt-2"></div>
+      </form>
+    </section>
+
+    <!-- Rating Section -->
+    <section class="mt-12 border-t pt-10">
+      <h2 class="text-2xl font-bold mb-4">Rate this article</h2>
+      <div class="flex items-center gap-6">
+        <div class="rating rating-lg rating-half" id="rating-stars">
+          <input type="radio" name="rating-5" class="rating-hidden" />
+          {[1, 2, 3, 4, 5].map((star) => (
+            <>
+              <input
+                type="radio"
+                name="rating-5"
+                class="mask mask-star-2 mask-half-1 bg-orange-400"
+                value={star - 0.5}
+              />
+              <input
+                type="radio"
+                name="rating-5"
+                class="mask mask-star-2 mask-half-2 bg-orange-400"
+                value={star}
+              />
+            </>
           ))}
         </div>
-      )}
-    </article>
-  ) : (
-    <div class="text-center py-32">
-      <h2 class="text-4xl font-bold mb-4">Article Not Found</h2>
-      <p class="text-xl opacity-70">This article may have been removed or is not published.</p>
-      <a href="/" class="btn btn-primary mt-8">Back to Home</a>
-    </div>
-  )}
+        <button
+          id="submit-rating"
+          class="btn btn-outline btn-primary"
+          data-article-id={article.id}
+        >
+          Submit Rating
+        </button>
+      </div>
+      <div id="rating-status" class="mt-2 text-sm"></div>
+    </section>
+  </article>
 </Layout>
+
+<!-- Client-side interactivity (TypeScript-safe) -->
+<script>
+  const articleId = document.querySelector<HTMLInputElement>(
+    'input[name="articleId"]'
+  )?.value;
+
+  // Favorite toggle
+  const favoriteBtn = document.querySelector<HTMLButtonElement>('.favorite-btn');
+  if (favoriteBtn) {
+    favoriteBtn.addEventListener('click', async () => {
+      // TODO: Replace with actual API call when user is logged in
+      alert('Favorite toggled (backend needed)');
+      // Example fetch:
+      // const res = await fetch('/api/favorite', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify({ articleId })
+      // });
+      // const data = await res.json();
+      // document.querySelector('.favorite-count')!.textContent = data.count;
+    });
+  }
+
+  // Comment form submission
+  const commentForm = document.getElementById('comment-form');
+  if (commentForm) {
+    commentForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(commentForm as HTMLFormElement);
+      const data = Object.fromEntries(formData);
+      const statusDiv = document.getElementById('comment-status');
+      if (statusDiv) statusDiv.textContent = 'Submitting...';
+
+      try {
+        const res = await fetch('/api/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          if (statusDiv) statusDiv.textContent = 'Comment posted! Refreshing...';
+          setTimeout(() => location.reload(), 1500);
+        } else {
+          if (statusDiv) statusDiv.textContent = 'Error: ' + result.message;
+        }
+      } catch (err) {
+        if (statusDiv) statusDiv.textContent = 'Network error.';
+      }
+    });
+  }
+
+  // Rating submission
+  const submitRating = document.getElementById('submit-rating');
+  if (submitRating) {
+    submitRating.addEventListener('click', async () => {
+      const selected = document.querySelector<HTMLInputElement>(
+        'input[name="rating-5"]:checked'
+      );
+      if (!selected) {
+        alert('Please select a rating.');
+        return;
+      }
+      const ratingValue = selected.value;
+      const statusDiv = document.getElementById('rating-status');
+      if (statusDiv) statusDiv.textContent = 'Submitting...';
+
+      try {
+        const res = await fetch('/api/ratings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ articleId, rating: ratingValue }),
+        });
+        const result = await res.json();
+        if (res.ok) {
+          if (statusDiv) statusDiv.textContent = 'Thank you for rating!';
+          // For simplicity, reload to show updated average
+          location.reload();
+        } else {
+          if (statusDiv) statusDiv.textContent = 'Error: ' + result.message;
+        }
+      } catch (err) {
+        if (statusDiv) statusDiv.textContent = 'Network error.';
+      }
+    });
+  }
+</script>

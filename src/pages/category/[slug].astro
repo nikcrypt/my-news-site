@@ -1,0 +1,80 @@
+---
+// src/pages/category/[slug].astro
+import { pb } from '../../lib/pocketbase';
+import ArticleCard from '../../components/ArticleCard.astro';
+import Layout from '../../layouts/Layout.astro';
+
+export async function getStaticPaths() {
+  const cats = await pb.collection('categories').getFullList({ fields: 'slug' });
+  return cats.map(c => ({ params: { slug: c.slug } }));
+}
+
+const { slug } = Astro.params;
+
+let category;
+try {
+  category = await pb.collection('categories').getFirstListItem(
+    pb.filter('slug = {:slug}', { slug })
+  );
+} catch {
+  return Astro.redirect('/404');
+}
+
+const catId = category.id;
+
+// Correct filter – using safe placeholder
+console.log('Trying filter:', pb.filter(
+  'category.id = "{:id}" || category.parent.id = "{:id}"',
+  { id: catId }
+));
+console.log('Category ID:', catId);
+
+// const testFilter = pb.filter('category.id = {:id} || category.parent.id = {:id}', { id: catId });
+// console.log('Final filter sent to PocketBase:', testFilter);
+
+// const safeFilter = pb.filter(
+//   'category.id = {:id} || category.parent.id = {:id}',
+//   { id: catId }
+// );
+// console.log('Safe filter (no single quotes):', safeFilter);
+// console.log('Raw URL would be:', 
+//   `http://127.0.0.1:8090/api/collections/articles/records?filter=${encodeURIComponent(safeFilter)}&sort=-published_at&expand=category,cover`
+// );
+
+console.log('Category ID:', catId);
+console.log(pb.filter('category.id = {:id}', { id: catId }));
+// Logs: category.id = 'zibvy3svo1qah9z'
+// const catId = category.id;
+
+// Generate a valid filter with single quotes
+const filterStr = pb.filter(
+  '(category.id = {:id} || category.parent.id = {:id})',
+  { id: catId }
+);
+
+const articles = await pb.collection('articles').getList(1, 30, {
+  filter: filterStr,
+  sort: '-published_at',
+  expand: 'category,cover',
+});
+
+const pageTitle = category.name || 'Category';
+---
+
+<Layout title={pageTitle}>
+  <div class="py-8">
+    <h1 class="text-4xl md:text-5xl font-bold mb-6">{pageTitle}</h1>
+
+    {articles.items.length === 0 ? (
+      <div class="alert alert-info">
+        <span>No articles found in this category or its subcategories yet.</span>
+      </div>
+    ) : (
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {articles.items.map(article => (
+          <ArticleCard article={article} pb={pb} />
+        ))}
+      </div>
+    )}
+  </div>
+</Layout>
