@@ -1,50 +1,132 @@
 ---
-import { pb } from '../../lib/pb'; // your PocketBase client
+// src/pages/news/[slug].astro
+import { pb } from '../../lib/pb';
 import Layout from '../../layouts/Layout.astro';
 
+// Generate static paths for all published articles
 export async function getStaticPaths() {
   try {
-    const allArticles = await pb.collection('articles').getFullList({
-      filter: 'status = "published"',
-      fields: 'slug', // only fetch slug to keep it light
+    const articles = await pb.collection('articles').getFullList({
+      filter: 'status = "published" && published_at <= @now',
+      fields: 'slug',
     });
-    console.log('Found articles for paths:', allArticles.length, allArticles.map(a => a.slug)); // ← debug in terminal
-
-    return allArticles.map(article => ({
+    return articles.map(article => ({
       params: { slug: article.slug },
     }));
   } catch (err) {
     console.error('getStaticPaths error:', err);
-    return []; // fallback - but log it!
+    return [];
   }
 }
 
 const { slug } = Astro.params;
 
 // Fetch the single article
-let article;
+let article = null;
 try {
-  article = await pb.collection('articles').getFirstListItem(`slug="${slug}" && status = "published"`, {
-    expand: 'category,author,tags',
-  });
+  article = await pb.collection('articles').getFirstListItem(
+    `slug = "${slug}" && status = "published" && published_at <= @now`,
+    {
+      expand: 'category,author,tags',
+    }
+  );
 } catch (err) {
-  console.error('Article fetch error:', err);
-  // Optional: return Astro.redirect('/404') or set status
+  console.error('Fetch error:', err);
   Astro.response.status = 404;
   return Astro.redirect('/404');
 }
+
+// Featured image (using 'cover' field as you confirmed)
+const coverFilename = article?.cover; // ← your field name
+let featuredImage = null;
+
+if (coverFilename) {
+  featuredImage = pb.files.getUrl(
+    article,
+    coverFilename,
+    { thumb: '1200x0' } // high quality, auto height
+  );
+}
+
+// Fallback placeholder if no image
+const fallbackImage = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&auto=format&fit=crop&q=80';
+
+// Author avatar (optional)
+const authorAvatar = article.expand?.author?.avatar
+  ? pb.files.getUrl(article.expand.author, article.expand.author.avatar, { thumb: '80x80' })
+  : null;
 ---
 
-<Layout title={article?.title || 'Not Found'}>
+<Layout title={article.title || 'Article Not Found'} active="article">
+
   {article ? (
-    <article class="prose mx-auto">
-      <h1>{article.title}</h1>
-      <div set:html={article.content} />
-      <!-- rest of your article markup -->
+    <article class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-16 prose prose-lg lg:prose-xl dark:prose-invert">
+
+      <!-- Hero Featured Image (using 'cover' field) -->
+      <figure class="mb-8 md:mb-12 -mx-4 sm:-mx-6 lg:-mx-8">
+        <img
+          src={featuredImage || fallbackImage}
+          alt={article.title || 'Article cover'}
+          class="w-full h-auto rounded-none sm:rounded-2xl shadow-2xl object-cover aspect-[16/9]"
+          loading="eager"
+          decoding="async"
+          width="1200"
+          height="675"
+        />
+      </figure>
+
+      <!-- Title -->
+      <h1 class="text-4xl md:text-5xl font-bold mb-6">{article.title}</h1>
+
+      <!-- Meta info -->
+      <div class="flex flex-wrap items-center gap-4 text-sm opacity-80 mb-10">
+        {article.expand?.category?.name && (
+          <span class="badge badge-primary badge-outline uppercase text-xs px-3 py-1">
+            {article.expand.category.name}
+          </span>
+        )}
+
+        {article.expand?.author?.name && (
+          <div class="flex items-center gap-3">
+            {authorAvatar && (
+              <div class="avatar">
+                <div class="w-10 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
+                  <img src={authorAvatar} alt={article.expand.author.name} />
+                </div>
+              </div>
+            )}
+            <span class="font-medium">By {article.expand.author.name}</span>
+          </div>
+        )}
+
+        <time class="text-base-content/70">
+          {new Date(article.published_at).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          })}
+        </time>
+      </div>
+
+      <!-- Rich content from PocketBase -->
+      <div class="prose-headings:font-bold prose-a:text-primary" set:html={article.content} />
+
+      <!-- Tags (if any) -->
+      {article.expand?.tags?.length > 0 && (
+        <div class="mt-12 flex flex-wrap gap-2">
+          {article.expand.tags.map(tag => (
+            <span class="badge badge-outline badge-secondary text-sm">
+              #{tag.name}
+            </span>
+          ))}
+        </div>
+      )}
     </article>
   ) : (
-    <p>Article not found</p>
+    <div class="text-center py-32">
+      <h2 class="text-4xl font-bold mb-4">Article Not Found</h2>
+      <p class="text-xl opacity-70">This article may have been removed or is not published.</p>
+      <a href="/" class="btn btn-primary mt-8">Back to Home</a>
+    </div>
   )}
-
-  
 </Layout>
