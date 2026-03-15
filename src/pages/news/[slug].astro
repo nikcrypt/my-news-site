@@ -245,7 +245,7 @@ const authorAvatar = article.expand?.author?.avatar
           comments.map((comment) => (
             <div class="bg-base-100 p-4 rounded-lg shadow-sm">
               <div class="flex items-center gap-3 mb-2">
-                <div class="font-semibold">{comment.name}</div>
+                <div class="font-semibold">{comment.user}</div>
                 <div class="text-xs opacity-60">{formatDate(comment.created)}</div>
               </div>
               <p class="text-base-content/80">{comment.content}</p>
@@ -388,11 +388,12 @@ const authorAvatar = article.expand?.author?.avatar
 
 <!-- Client‑side interactivity – now inside Layout (Astro will hoist it correctly) -->
 <script>
-  // (your existing script, unchanged)
-  const articleId = document.querySelector<HTMLInputElement>(
-    'input[name="articleId"]'
-  )?.value;
+  import { pb } from '../../lib/pb';
+  // Helper to get elements with better typing
+  const articleIdInput = document.querySelector<HTMLInputElement>('input[name="articleId"]');
+  const articleId = articleIdInput?.value || '';
 
+  // Favorite button (unchanged)
   const favoriteBtn = document.querySelector<HTMLButtonElement>('.favorite-btn');
   if (favoriteBtn) {
     favoriteBtn.addEventListener('click', async () => {
@@ -400,63 +401,107 @@ const authorAvatar = article.expand?.author?.avatar
     });
   }
 
-  const commentForm = document.getElementById('comment-form');
-  if (commentForm) {
-    commentForm.addEventListener('submit', async (e) => {
+  // ───────────────────────────────────────────────
+  // Comment form – direct PocketBase create
+  // ───────────────────────────────────────────────
+  const commentFormElement = document.getElementById('comment-form');
+  if (commentFormElement instanceof HTMLFormElement) {
+    commentFormElement.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const formData = new FormData(commentForm as HTMLFormElement);
-      const data = Object.fromEntries(formData);
+
+      const formData = new FormData(commentFormElement);
+      const name    = (formData.get('name') as string)?.trim()    || 'Anonymous';
+      const email   = (formData.get('email') as string)?.trim()   || '';
+      const content = (formData.get('content') as string)?.trim() || '';
+
+      if (!content) {
+        alert('Please write a comment.');
+        return;
+      }
+
       const statusDiv = document.getElementById('comment-status');
-      if (statusDiv) statusDiv.textContent = 'Submitting...';
+      if (statusDiv) {
+        statusDiv.textContent = 'Submitting comment...';
+        statusDiv.className = 'mt-2 text-info';
+      }
 
       try {
-        const res = await fetch('/api/comments', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
+        await pb.collection('comments').create({
+          article: articleId,
+          user:    name,
+          content: content,
+          status:  'pending',
+          // email:   email,   // add this line only if you have "email" field in comments collection
         });
-        const result = await res.json();
-        if (res.ok) {
-          if (statusDiv) statusDiv.textContent = 'Comment posted! Refreshing...';
-          setTimeout(() => location.reload(), 1500);
-        } else {
-          if (statusDiv) statusDiv.textContent = 'Error: ' + result.message;
+
+        if (statusDiv) {
+          statusDiv.textContent = 'Thank you! Your comment is awaiting approval.';
+          statusDiv.className = 'mt-2 text-success';
         }
-      } catch (err) {
-        if (statusDiv) statusDiv.textContent = 'Network error.';
+
+        commentFormElement.reset(); // now safe – we checked instanceof HTMLFormElement
+      } catch (err: unknown) {
+        console.error('Comment submission failed:', err);
+
+        const errorMessage = err instanceof Error 
+          ? err.message 
+          : 'Unknown error occurred';
+
+        if (statusDiv) {
+          statusDiv.textContent = errorMessage.includes('403')
+            ? 'Submission blocked – check PocketBase create rule'
+            : `Error: ${errorMessage}`;
+          statusDiv.className = 'mt-2 text-error';
+        }
       }
     });
   }
 
-  const submitRating = document.getElementById('submit-rating');
-  if (submitRating) {
-    submitRating.addEventListener('click', async () => {
-      const selected = document.querySelector<HTMLInputElement>(
-        'input[name="rating-5"]:checked'
-      );
-      if (!selected) {
+  // ───────────────────────────────────────────────
+  // Rating submission – direct PocketBase create
+  // ───────────────────────────────────────────────
+  const submitRatingBtn = document.getElementById('submit-rating');
+  if (submitRatingBtn instanceof HTMLButtonElement) {
+    submitRatingBtn.addEventListener('click', async () => {
+      const selected = document.querySelector<HTMLInputElement>('input[name="rating-5"]:checked');
+      if (!selected?.value) {
         alert('Please select a rating.');
         return;
       }
-      const ratingValue = selected.value;
+
+      const ratingValue = parseFloat(selected.value);
+
       const statusDiv = document.getElementById('rating-status');
-      if (statusDiv) statusDiv.textContent = 'Submitting...';
+      if (statusDiv) {
+        statusDiv.textContent = 'Submitting rating...';
+        statusDiv.className = 'mt-2 text-info';
+      }
 
       try {
-        const res = await fetch('/api/ratings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ articleId, rating: ratingValue }),
+        await pb.collection('ratings').create({
+          article: articleId,
+          rating:  ratingValue,
         });
-        const result = await res.json();
-        if (res.ok) {
-          if (statusDiv) statusDiv.textContent = 'Thank you for rating!';
-          location.reload();
-        } else {
-          if (statusDiv) statusDiv.textContent = 'Error: ' + result.message;
+
+        if (statusDiv) {
+          statusDiv.textContent = 'Thank you for your rating!';
+          statusDiv.className = 'mt-2 text-success';
         }
-      } catch (err) {
-        if (statusDiv) statusDiv.textContent = 'Network error.';
+
+        setTimeout(() => location.reload(), 800);
+      } catch (err: unknown) {
+        console.error('Rating submission failed:', err);
+
+        const errorMessage = err instanceof Error 
+          ? err.message 
+          : 'Unknown error occurred';
+
+        if (statusDiv) {
+          statusDiv.textContent = errorMessage.includes('403')
+            ? 'Rating blocked – check PocketBase create rule'
+            : `Error: ${errorMessage}`;
+          statusDiv.className = 'mt-2 text-error';
+        }
       }
     });
   }

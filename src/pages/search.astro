@@ -1,0 +1,113 @@
+---
+// src/pages/search.astro
+import Layout from '../layouts/Layout.astro';
+import ArticleCard from '../components/ArticleCard.astro';
+import { pb } from '../lib/pocketbase';
+
+export const prerender = false; // ensure dynamic rendering
+
+const searchParams = Astro.url.searchParams;
+const q = searchParams.get('q') || '';
+const searchQuery = q.trim();
+
+let results: Array<Record<string, any>> = [];
+let errorMessage: string | null = null;
+let debugFilter: string = '';
+
+if (searchQuery) {
+  try {
+    const escaped = searchQuery.replace(/"/g, '\\"');
+    const filter = `(title ~ "${escaped}" || body ~ "${escaped}") && status = "published" && published_at <= @now`;
+    debugFilter = filter;
+
+    // This should log to terminal
+    console.log('🔍 SEARCH.PAGE: query=', searchQuery);
+    console.log('📄 filter=', filter);
+
+    const response = await pb.collection('articles').getList(1, 20, {
+      filter,
+      sort: '-published_at',
+      expand: 'category',
+    });
+
+    results = response.items;
+    console.log(`✅ Found ${results.length} articles`);
+  } catch (err) {
+    console.error('❌ Search error:', err);
+    errorMessage = err?.message || 'Search failed. Please try again.';
+  }
+}
+---
+
+<Layout title={searchQuery ? `Search: ${searchQuery}` : 'Search'}>
+  <!-- Debug info for browser console -->
+  <script>
+    console.log('🔍 Client-side: searchQuery =', new URLSearchParams(window.location.search).get('q'));
+  </script>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <h1 class="text-3xl md:text-4xl font-bold mb-6">
+      Search results for: "{searchQuery || '...'}"
+    </h1>
+
+    {searchQuery ? (
+      <>
+        {errorMessage ? (
+          <div class="alert alert-error shadow-lg mb-8">
+            <span>{errorMessage}</span>
+          </div>
+        ) : results.length === 0 ? (
+          <div class="alert alert-info shadow-lg mb-8">
+            <span>No articles found matching "{searchQuery}". Try different keywords.</span>
+          </div>
+        ) : (
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {results.map(article => (
+              <ArticleCard article={article} pb={pb} />
+            ))}
+          </div>
+        )}
+      </>
+    ) : (
+      <div class="alert alert-warning shadow-lg">
+        <span>Please enter a search term above.</span>
+      </div>
+    )}
+
+    <!-- Additional client-side test -->
+    <div id="debug-info" class="mt-8 p-4 bg-base-300 rounded hidden"></div>
+    <script>
+      (async () => {
+        const params = new URLSearchParams(window.location.search);
+        const q = params.get('q');
+        if (!q) return;
+
+        const debugDiv = document.getElementById('debug-info');
+        if (debugDiv) debugDiv.classList.remove('hidden');
+
+        try {
+          // Attempt direct fetch to PocketBase API
+          // Assuming PocketBase is on same host but different port (8090)
+          const pbUrl = 'http://127.0.0.1:8090'; // adjust if needed
+          const escaped = q.replace(/"/g, '\\"');
+          const filter = `(title ~ "${escaped}" || body ~ "${escaped}") && status = "published" && published_at <= @now`;
+          const url = `${pbUrl}/api/collections/articles/records?filter=${encodeURIComponent(filter)}&sort=-published_at&expand=category`;
+          
+          console.log('🌐 Client fetch URL:', url);
+          const res = await fetch(url);
+          const data = await res.json();
+          console.log('📦 Client fetch result:', data);
+          
+          if (debugDiv) {
+            debugDiv.innerHTML = `<strong>Client API Test:</strong> Found ${data.items?.length || 0} articles. Check console for details.`;
+          }
+        } catch (err) {
+          console.error('❌ Client fetch error:', err);
+          if (debugDiv) {
+            debugDiv.innerHTML = `<strong>Client API Test Error:</strong> ${err.message}`;
+          }
+        }
+      })();
+    </script>
+  </div>
+</Layout>
