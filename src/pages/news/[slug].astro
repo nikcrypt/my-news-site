@@ -2,7 +2,7 @@
 // src/pages/news/[slug].astro
 import { pb } from '../../lib/pb';
 import Layout from '../../layouts/Layout.astro';
-
+export const prerender = false;
 // ------------------------------------------------------------
 // 1. getStaticPaths() – now with logging and better options
 // ------------------------------------------------------------
@@ -11,24 +11,31 @@ export async function getStaticPaths() {
     console.log('🔍 Fetching articles for static paths...');
     const articles = await pb.collection('articles').getFullList({
       filter: 'status = "published" && published_at <= @now',
-      fields: 'slug',
-      batch: 100,               // fetch up to 100 per request
-      requestKey: null,          // disable auto-cancellation
+      fields: 'id,slug', // also fetch id for better logging
     });
-    console.log(`✅ Found ${articles.length} published articles`);
-    if (articles.length > 0) {
-      console.log('📰 Sample slugs:', articles.slice(0, 5).map(a => a.slug).join(', '));
-    }
 
-    return articles.map((article) => ({
-      params: { slug: article.slug },
+    console.log(`Found ${articles.length} published articles`);
+
+    // Filter out invalid slugs
+    const valid = articles.filter(a => {
+      const s = a.slug?.trim();
+      if (!s || s.length < 3) {
+        console.warn(`Skipping article ${a.id} - invalid slug: "${a.slug}"`);
+        return false;
+      }
+      return true;
+    });
+
+    console.log(`Generated ${valid.length} valid paths`);
+
+    return valid.map(a => ({
+      params: { slug: a.slug },
     }));
   } catch (err) {
-    console.error('❌ getStaticPaths error:', err);
-    return []; // no pages will be generated
+    console.error('getStaticPaths failed:', err.message || err);
+    return [];
   }
 }
-
 // ------------------------------------------------------------
 // 2. Get current slug from URL params
 // ------------------------------------------------------------

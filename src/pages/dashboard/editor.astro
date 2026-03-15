@@ -1,0 +1,13 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import AuthorEditor from '../../components/AuthorEditor.jsx';
+
+export const prerender = false;
+---
+
+<Layout title="Create New Article">
+  <main class="max-w-5xl mx-auto py-12 px-4">
+    <h1 class="text-4xl font-bold mb-12 text-center">Write New Article</h1>
+    <AuthorEditor client:load />
+  </main>
+</Layout>
